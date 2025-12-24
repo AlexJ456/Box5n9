@@ -128,17 +128,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function playTone() {
-        if (state.soundEnabled && audioContext) {
-            try {
-                const oscillator = audioContext.createOscillator();
-                oscillator.type = 'sine';
-                oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
-                oscillator.connect(audioContext.destination);
-                oscillator.start();
-                oscillator.stop(audioContext.currentTime + 0.1);
-            } catch (e) {
-                console.error('Error playing tone:', e);
-            }
+        if (!state.soundEnabled || !audioContext) {
+            return;
+        }
+
+        try {
+            const now = audioContext.currentTime;
+            const gain = audioContext.createGain();
+            const filter = audioContext.createBiquadFilter();
+
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.22, now + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(1900, now);
+            filter.Q.setValueAtTime(0.9, now);
+
+            const primary = audioContext.createOscillator();
+            primary.type = 'sine';
+            primary.frequency.setValueAtTime(432, now);
+            primary.detune.setValueAtTime(-6, now);
+
+            const overtone = audioContext.createOscillator();
+            overtone.type = 'triangle';
+            overtone.frequency.setValueAtTime(648, now);
+            overtone.detune.setValueAtTime(4, now);
+
+            primary.connect(gain);
+            overtone.connect(gain);
+            gain.connect(filter);
+            filter.connect(audioContext.destination);
+
+            primary.start(now);
+            overtone.start(now + 0.02);
+            primary.stop(now + 1.2);
+            overtone.stop(now + 1.2);
+        } catch (e) {
+            console.error('Error playing tone:', e);
         }
     }
 
@@ -433,36 +460,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function render() {
+        const showTimer = state.isPlaying || state.hasStarted || state.sessionComplete;
+        const sessionLabel = state.sessionComplete ? 'Session complete' : state.isPlaying ? 'In progress' : 'Ready to begin';
+
         let html = `
-            <h1>Box Breathing</h1>
+            <div class="app-shell">
+                <div class="header">
+                    <div>
+                        <p class="eyebrow">Guided rhythm</p>
+                        <div class="pill">${sessionLabel}</div>
+                    </div>
+                    ${showTimer ? `<div class="timer">${icons.clock} ${formatTime(state.totalTime)}</div>` : ''}
+                </div>
+                <div class="tagline">
+                    Smooth square breathing with an OLED-friendly glow for calm focus.
+                </div>
+                <h1>Box Breathing</h1>
         `;
+
         if (state.isPlaying) {
             html += `
-                <div class="timer">Total Time: ${formatTime(state.totalTime)}</div>
-                <div class="instruction">${getInstruction(state.count)}</div>
-                <div class="countdown">${state.countdown}</div>
+                <div class="highlight-card">
+                    <div class="instruction">${getInstruction(state.count)}</div>
+                    <div class="countdown">${state.countdown}</div>
+                    <div class="phase-tracker">
             `;
             const phases = ['Inhale', 'Hold', 'Exhale', 'Wait'];
-            html += `<div class="phase-tracker">`;
             phases.forEach((label, index) => {
                 const phaseColor = phaseColors[index] || '#fde68a';
                 const softPhaseColor = hexToRgba(phaseColor, 0.25);
                 html += `
-                    <div class="phase-item ${index === state.count ? 'active' : ''}" style="--phase-color: ${phaseColor}; --phase-soft: ${softPhaseColor};">
-                        <span class="phase-dot"></span>
-                        <span class="phase-label">${label}</span>
-                    </div>
+                        <div class="phase-item ${index === state.count ? 'active' : ''}" style="--phase-color: ${phaseColor}; --phase-soft: ${softPhaseColor};">
+                            <span class="phase-dot"></span>
+                            <span class="phase-label">${label}</span>
+                        </div>
                 `;
             });
-            html += `</div>`;
+            html += `
+                    </div>
+                </div>
+            `;
         }
-        if (state.timeLimitReached && !state.sessionComplete) {
-            const limitMessage = state.isPlaying ? 'Finishing current cycle…' : 'Time limit reached';
-            html += `<div class="limit-warning">${limitMessage}</div>`;
-        }
+
         if (!state.isPlaying && !state.sessionComplete) {
             html += `
-                <div class="settings">
+                <div class="card">
                     <div class="form-group">
                         <label class="switch">
                             <input type="checkbox" id="sound-toggle" ${state.soundEnabled ? 'checked' : ''}>
@@ -474,48 +516,59 @@ document.addEventListener('DOMContentLoaded', () => {
                         </label>
                     </div>
                     <div class="form-group">
+                        <label for="time-limit">Minutes (optional)</label>
                         <input
                             type="number"
                             inputmode="numeric"
-                            placeholder="Time limit (minutes)"
+                            placeholder="Time limit"
                             value="${state.timeLimit}"
                             id="time-limit"
                             step="1"
                             min="0"
                         >
-                        <label for="time-limit">Minutes (optional)</label>
                     </div>
                 </div>
-                <div class="prompt">Press start to begin</div>
-            `;
-        }
-        if (state.sessionComplete) {
-            html += `<div class="complete">Complete!</div>`;
-        }
-        if (!state.sessionComplete) {
-            html += `
-                <button id="toggle-play">
-                    ${state.isPlaying ? icons.pause : icons.play}
-                    ${state.isPlaying ? 'Pause' : 'Start'}
-                </button>
-            `;
-        }
-        if (!state.isPlaying && !state.sessionComplete) {
-            html += `
-                <div class="slider-container">
-                    <label for="phase-time-slider">Phase Time (seconds): <span id="phase-time-value">${state.phaseTime}</span></label>
-                    <input type="range" min="3" max="6" step="1" value="${state.phaseTime}" id="phase-time-slider">
+                <div class="card">
+                    <div class="slider-container">
+                        <label for="phase-time-slider">Phase Time (seconds): <span id="phase-time-value">${state.phaseTime}</span></label>
+                        <input type="range" min="3" max="6" step="1" value="${state.phaseTime}" id="phase-time-slider">
+                    </div>
+                    <div class="prompt">Choose a duration or start instantly.</div>
                 </div>
             `;
         }
+
+        if (state.timeLimitReached && !state.sessionComplete) {
+            const limitMessage = state.isPlaying ? 'Finishing current cycle…' : 'Time limit reached';
+            html += `<div class="limit-warning">${limitMessage}</div>`;
+        }
+
         if (state.sessionComplete) {
+            html += `<div class="complete">Complete! Your breath stayed balanced.</div>`;
+        }
+
+        if (!state.sessionComplete) {
             html += `
-                <button id="reset">
-                    ${icons.rotateCcw}
-                    Back to Start
-                </button>
+                <div class="button-row">
+                    <button id="toggle-play">
+                        ${state.isPlaying ? icons.pause : icons.play}
+                        ${state.isPlaying ? 'Pause session' : 'Start session'}
+                    </button>
+                </div>
             `;
         }
+
+        if (state.sessionComplete) {
+            html += `
+                <div class="button-row">
+                    <button id="reset" class="ghost">
+                        ${icons.rotateCcw}
+                        Back to Start
+                    </button>
+                </div>
+            `;
+        }
+
         if (!state.isPlaying && !state.sessionComplete) {
             html += `
                 <div class="shortcut-buttons">
@@ -531,6 +584,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
         }
+
+        html += `</div>`;
+
         app.innerHTML = html;
 
         updateCanvasVisibility();
